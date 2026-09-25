@@ -120,6 +120,7 @@ class CDPCookieFetcher:
             "--no-default-browser-check",
             "--disable-session-crashed-bubble",
             "--disable-infobars",
+            "--restore-last-session",
         ]
         creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if platform.system() == "Windows" else 0
         return subprocess.Popen(
@@ -189,16 +190,48 @@ class CDPCookieFetcher:
             except Exception:
                 pass
 
-    def _kill_chrome_windows_by_profile(self) -> None:
-        """Убивает все chrome.exe с этим --user-data-dir (см. docstring _kill_chrome)."""
+    def _kill_chrome_windows_by_profile(self, graceful_timeout: float = 5.0) -> None:
+        """
+        Закрывает все chrome.exe с этим --user-data-dir (см. docstring _kill_chrome).
+
+        Сначала пробует мягкое закрытие (без `/F`) — Chrome в этом случае успевает
+        сохранить сессию (открытые вкладки) и восстанавливает их при следующем
+        запуске (см. `--restore-last-session` в `_launch_chrome`). Жёсткий `/F` —
+        только если процесс не закрылся сам за `graceful_timeout` секунд, чтобы не
+        плодить зомби-процессы (см. docstring _kill_chrome).
+        """
+        pids = self._find_chrome_pids_by_profile()
+        if not pids:
+            return
+
+        for pid in pids:
+            subprocess.run(
+                ["taskkill", "/T", "/PID", str(pid)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+
+        deadline = time.time() + graceful_timeout
+        while time.time() < deadline:
+            if not self._find_chrome_pids_by_profile():
+                return
+            time.sleep(0.5)
+
+        for pid in self._find_chrome_pids_by_profile():
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(pid)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+
+    def _find_chrome_pids_by_profile(self) -> List[int]:
+        """Возвращает PID всех chrome.exe с этим --user-data-dir."""
         profile_marker = f"*--user-data-dir=*{self.profile_dir}*"
         ps_script = (
             "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
             f"Where-Object {{ $_.CommandLine -like '{profile_marker}' }} | "
-            "ForEach-Object { taskkill /F /T /PID $_.ProcessId }"
+            "Select-Object -ExpandProperty ProcessId"
         )
-        subprocess.run(
+        result = subprocess.run(
             ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            capture_output=True, text=True,
         )
+        return [int(line) for line in result.stdout.split() if line.strip().isdigit()]
