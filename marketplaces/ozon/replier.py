@@ -8,7 +8,9 @@ from typing import Dict, List, Optional
 from config.ozon_config import REQUEST_DELAY
 from config.templates import OZON_CANCELED_ORDER_HIGH_RATING_TEMPLATES, OZON_REPLY_TEMPLATES
 from marketplaces.ozon.api_client import OzonAPIClient
+from shared.article_parsing import resolve_sub_brand
 from shared.drive_stocks_client import load_stocks_from_drive
+from shared.gemini_client import generate_issue_reply
 from shared.logger import logger
 from shared.recommendations import (
     generate_reply_text,
@@ -16,13 +18,22 @@ from shared.recommendations import (
     load_product_cards,
     build_offer_index,
 )
+from shared.review_heuristics import ISSUE_LABELS, detect_review_issue
 from shared.storage import JSONStorage
 
 
 class OzonReviewReplier:
     """Отправка ответов на отзывы Ozon."""
 
-    def __init__(self, cookies_file, company_id: str, data_dir, drive_folder: str, brand_name: str):
+    def __init__(
+        self,
+        cookies_file,
+        company_id: str,
+        data_dir,
+        drive_folder: str,
+        brand_name: str,
+        sub_brands: Optional[Dict[str, str]] = None,
+    ):
         """
         Инициализация.
 
@@ -32,11 +43,14 @@ class OzonReviewReplier:
             data_dir: Директория с данными
             drive_folder: Название папки на Google Drive с файлом остатков для этого кабинета
             brand_name: Название бренда для подстановки в текст ответов
+            sub_brands: Словарь {префикс_дизайна: подпись_бренда} для кабинетов,
+                торгующих несколькими брендами (см. `resolve_sub_brand`)
         """
         self.api_client = OzonAPIClient(cookies_file, company_id)
         self.storage = JSONStorage(data_dir)
         self.data_dir = data_dir
         self.brand_name = brand_name
+        self.sub_brands = sub_brands or {}
 
         # Загружаем остатки и карточки товаров для алгоритма рекомендаций
         logger.info("📦 Загрузка данных для алгоритма рекомендаций...")
@@ -174,6 +188,10 @@ class OzonReviewReplier:
         # Нормализуем рейтинг
         rating = max(1, min(5, rating))
 
+        # Подпись бренда для этого конкретного товара (кабинет skazka продаёт
+        # и «Сказку», и «Анна Мария» под разными дизайнами — см. config/accounts.py)
+        brand_name = resolve_sub_brand(offer_id, self.sub_brands, self.brand_name)
+
         # Высокая оценка (4-5) при отменённом заказе — без рекомендаций и советов по уходу,
         # товар покупателю не доехал. 1-3★ отвечаем как обычно.
         if order_canceled and rating >= 4:
@@ -192,11 +210,25 @@ class OzonReviewReplier:
                     )
 
                     if recommendations:
-                        reply = generate_reply_text(review_text, recommendations, brand_name=self.brand_name)
+                        reply = generate_reply_text(review_text, recommendations, brand_name=brand_name)
                         logger.info(f"   🎯 Найдено рекомендаций: {len(recommendations)}")
                         return reply
                 except Exception as e:
                     logger.warning(f"   ⚠️  Ошибка генерации рекомендаций: {e}")
+
+        # Для 1-4★ с явной, узнаваемой проблемой в тексте — адресный ответ через Gemini
+        # вместо общего шаблона (см. shared/gemini_client.py). Любая ошибка API —
+        # тихий fallback на фиксированный шаблон.
+        if rating < 5:
+            issue = detect_review_issue(review_text)
+            if issue in ISSUE_LABELS:
+                try:
+                    reply = generate_issue_reply(rating, review_text, issue, brand_name)
+                    if reply:
+                        logger.info(f"   🤖 Ответ сгенерирован через Gemini (категория: {issue})")
+                        return reply
+                except Exception as e:
+                    logger.warning(f"   ⚠️  Ошибка генерации ответа через Gemini: {e}")
 
         # Fallback: используем старый метод с шаблонами
         return self._select_template(rating)

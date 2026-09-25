@@ -139,6 +139,7 @@ def cmd_reply(marketplace: str, account: str, reviews_file: str = None) -> int:
             data_dir=config['data_dir'],
             drive_folder=config['drive_folder'],
             brand_name=config['brand_name'],
+            sub_brands=config.get('sub_brands'),
         )
 
         file_path = Path(reviews_file) if reviews_file else None
@@ -163,6 +164,7 @@ def cmd_reply(marketplace: str, account: str, reviews_file: str = None) -> int:
             data_dir=config["wb_data_dir"],
             brand_name=config["wb_brand_name"],
             drive_folder=config["wb_drive_folder"],
+            sub_brands=config.get('sub_brands'),
         )
 
         file_path = Path(reviews_file) if reviews_file else None
@@ -244,6 +246,7 @@ def cmd_auto(marketplace: str, account: str) -> int:
             data_dir=config['data_dir'],
             drive_folder=config['drive_folder'],
             brand_name=config['brand_name'],
+            sub_brands=config.get('sub_brands'),
         )
         reply_stats = replier.reply_to_reviews(reviews_file)
 
@@ -290,6 +293,7 @@ def cmd_auto(marketplace: str, account: str) -> int:
             data_dir=config["wb_data_dir"],
             brand_name=config["wb_brand_name"],
             drive_folder=config["wb_drive_folder"],
+            sub_brands=config.get('sub_brands'),
         )
         reply_stats = replier.reply_to_reviews(reviews_file)
 

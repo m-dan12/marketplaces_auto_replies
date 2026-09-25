@@ -8,7 +8,9 @@ from typing import Dict, Optional
 from config.templates import WB_REPLY_TEMPLATES
 from config.wb_config import FEEDBACKS_DELAY, MAX_REPLIES_PER_RUN
 from marketplaces.wb.api_client import WBAPIClient
+from shared.article_parsing import resolve_sub_brand
 from shared.drive_stocks_client import load_wb_stocks_from_drive
+from shared.gemini_client import generate_issue_reply
 from shared.logger import logger
 from shared.recommendations import (
     build_offer_index,
@@ -16,13 +18,21 @@ from shared.recommendations import (
     generate_reply_text,
     load_product_cards,
 )
+from shared.review_heuristics import ISSUE_LABELS, detect_review_issue
 from shared.storage import JSONStorage
 
 
 class WBReviewReplier:
     """Отправка ответов на отзывы Wildberries."""
 
-    def __init__(self, token_file: Path, data_dir: Path, brand_name: str, drive_folder: str):
+    def __init__(
+        self,
+        token_file: Path,
+        data_dir: Path,
+        brand_name: str,
+        drive_folder: str,
+        sub_brands: Optional[Dict[str, str]] = None,
+    ):
         """
         Инициализация.
 
@@ -32,11 +42,14 @@ class WBReviewReplier:
             brand_name: Название бренда для подстановки в текст ответов (например, «Сказка»)
             drive_folder: Название папки на Google Drive с файлом остатков этого кабинета
                 (см. `wb_drive_folder` в `config/accounts.py`)
+            sub_brands: Словарь {префикс_дизайна: подпись_бренда} для кабинетов,
+                торгующих несколькими брендами (см. `resolve_sub_brand`)
         """
         self.api_client = WBAPIClient(token_file)
         self.storage = JSONStorage(data_dir)
         self.data_dir = data_dir
         self.brand_name = brand_name
+        self.sub_brands = sub_brands or {}
 
         # Тот же алгоритм рекомендаций, что у Ozon — только остатки читаются
         # из WB-папки на Google Drive (nmId/vendorCode вместо product_id/offer_id)
@@ -169,6 +182,8 @@ class WBReviewReplier:
         Returns:
             Текст ответа
         """
+        brand_name = resolve_sub_brand(supplier_article, self.sub_brands, self.brand_name)
+
         if rating == 5 and supplier_article and self.cards and self.offer_index:
             product_id = self.offer_to_product.get(supplier_article)
             if not product_id:
@@ -181,12 +196,25 @@ class WBReviewReplier:
 
                     if recommendations:
                         reply = generate_reply_text(
-                            review_text, recommendations, brand_name=self.brand_name, marketplace_label="WB"
+                            review_text, recommendations, brand_name=brand_name, marketplace_label="WB"
                         )
                         logger.info(f"   🎯 Найдено рекомендаций: {len(recommendations)}")
                         return reply
                 except Exception as e:
                     logger.warning(f"   ⚠️  Ошибка генерации рекомендаций: {e}")
+
+        # Для 1-4★ с явной, узнаваемой проблемой в тексте — адресный ответ через Gemini
+        # вместо общего шаблона (см. shared/gemini_client.py).
+        if rating < 5:
+            issue = detect_review_issue(review_text)
+            if issue in ISSUE_LABELS:
+                try:
+                    reply = generate_issue_reply(rating, review_text, issue, brand_name)
+                    if reply:
+                        logger.info(f"   🤖 Ответ сгенерирован через Gemini (категория: {issue})")
+                        return reply
+                except Exception as e:
+                    logger.warning(f"   ⚠️  Ошибка генерации ответа через Gemini: {e}")
 
         return self._select_template(rating)
 

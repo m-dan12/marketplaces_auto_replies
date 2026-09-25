@@ -22,6 +22,10 @@ ACCOUNTS: Dict[str, Dict] = {
         "cookies_file": PROJECT_ROOT / "cookies" / "skazka_cookies.json",
         "data_dir": PROJECT_ROOT / "data" / "skazka",
         "brand_name": "«Сказка»",
+        # Кабинет продаёт товары двух брендов: часть дизайнов — под брендом
+        # «Анна Мария» (артикул начинается с "AM", например "AM4492/0-13-0/0").
+        # См. shared.article_parsing.resolve_sub_brand.
+        "sub_brands": {"AM": "«Анна Мария»"},
         "drive_folder": "Кабинет 1 (Профтекс)",
         "wb_token_file": PROJECT_ROOT / "cookies" / "skazka_wb_token.json",
         "wb_data_dir": PROJECT_ROOT / "data" / "skazka" / "wb",
