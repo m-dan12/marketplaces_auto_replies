@@ -1,0 +1,34 @@
+"""Config package."""
+
+from config.ozon_config import (
+    API_BASE_URL,
+    API_REPLY_ENDPOINT,
+    API_REVIEW_LIST_ENDPOINT,
+    AUTO_UPDATE_COOKIES,
+    COMPANY_ID,
+    DATA_DIR,
+    DEFAULT_DAYS_BACK,
+    HEADERS,
+    REQUEST_DELAY,
+    RETRY_COUNT,
+    RETRY_DELAY,
+    USE_SMART_PERIOD,
+)
+from config.templates import OZON_REPLY_TEMPLATES, WB_REPLY_TEMPLATES
+
+__all__ = [
+    "API_BASE_URL",
+    "API_REVIEW_LIST_ENDPOINT",
+    "API_REPLY_ENDPOINT",
+    "AUTO_UPDATE_COOKIES",
+    "COMPANY_ID",
+    "DATA_DIR",
+    "DEFAULT_DAYS_BACK",
+    "HEADERS",
+    "REQUEST_DELAY",
+    "RETRY_COUNT",
+    "RETRY_DELAY",
+    "USE_SMART_PERIOD",
+    "OZON_REPLY_TEMPLATES",
+    "WB_REPLY_TEMPLATES",
+]
