@@ -157,20 +157,48 @@ class CDPCookieFetcher:
         return [c for c in cookies if "ozon.ru" in c.get("domain", "")]
 
     def _kill_chrome(self, proc: subprocess.Popen) -> None:
-        """Завершает запущенный этим фетчером процесс Chrome."""
+        """
+        Завершает Chrome для этого профиля.
+
+        Chrome на Windows держит один процесс на `--user-data-dir`: если профиль
+        уже был открыт (например, предыдущий запуск не закрылся), наш новый
+        запуск Chrome просто передаёт аргументы уже работающему процессу и сам
+        сразу завершается — `proc.pid` в этот момент уже мёртв, а убивать нужно
+        настоящий долгоживущий процесс. Поэтому на Windows ищем и закрываем все
+        chrome.exe с этим `--user-data-dir` по командной строке, а не только
+        `proc.pid`. Без этого старый Chrome остаётся висеть вечно, а параллельная
+        работа живой сессии в нём и httpx-запросов с той же cookie — частая причина
+        разлогина аккаунта на Ozon (см. модульный docstring).
+        """
         logger.info("🚪 Закрываем Chrome...")
         try:
-            if platform.system() == "Windows":
-                subprocess.run(
-                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-            else:
-                proc.terminate()
-                proc.wait(timeout=5)
+            proc.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            pass
+
+        if platform.system() == "Windows":
+            self._kill_chrome_windows_by_profile()
+            return
+
+        try:
+            proc.terminate()
+            proc.wait(timeout=5)
         except Exception:
             try:
                 proc.kill()
             except Exception:
                 pass
+
+    def _kill_chrome_windows_by_profile(self) -> None:
+        """Убивает все chrome.exe с этим --user-data-dir (см. docstring _kill_chrome)."""
+        profile_marker = f"*--user-data-dir=*{self.profile_dir}*"
+        ps_script = (
+            "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
+            f"Where-Object {{ $_.CommandLine -like '{profile_marker}' }} | "
+            "ForEach-Object { taskkill /F /T /PID $_.ProcessId }"
+        )
+        subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
