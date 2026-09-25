@@ -63,6 +63,7 @@ python -m cli.main status --account skazka
 ```bash
 python -c "from shared.drive_stocks_client import load_stocks_from_drive, load_wb_stocks_from_drive; from shared.recommendations import generate_reply_text; print('OK')"
 python -c "from marketplaces.wb.api_client import WBAPIClient; from marketplaces.wb.replier import WBReviewReplier; print('OK')"
+python -c "from shared.llm_client import generate_issue_reply; print('OK')"
 ```
 
 ## Architecture
@@ -84,17 +85,21 @@ python -c "from marketplaces.wb.api_client import WBAPIClient; from marketplaces
 │       ├── replier.py            # Отправка ответов (WBReviewReplier) — использует общий shared/recommendations.py
 │       └── api_client.py         # HTTP-клиент Feedbacks API (список/ответ на отзывы)
 ├── config/
-│   ├── accounts.py               # Конфигурация аккаунтов (skazka, milky_garden, timeless)
+│   ├── accounts.py               # Конфигурация аккаунтов (skazka, milky_garden, timeless;
+│   │                             #   sub_brands — доп. бренды внутри кабинета, см. resolve_sub_brand)
 │   ├── ozon_config.py            # Конфигурация Ozon API
 │   ├── wb_config.py              # Конфигурация Wildberries Feedbacks API
+│   ├── llm_config.py             # Конфигурация GigaChat (см. shared/llm_client.py)
 │   └── templates.py              # Шаблоны ответов (Ozon и WB)
 ├── shared/
 │   ├── storage.py                # Работа с JSON
 │   ├── logger.py                 # Логирование
-│   ├── article_parsing.py        # Разбор артикула "PT140/0-0-56/1" (общий Ozon+WB)
-│   ├── review_heuristics.py      # Детект скрытого негатива в 5★, стандартные тексты (общий Ozon+WB)
+│   ├── article_parsing.py        # Разбор артикула "PT140/0-0-56/1" (общий Ozon+WB);
+│   │                             #   resolve_sub_brand — подпись бренда по префиксу дизайна
+│   ├── review_heuristics.py      # Детект негатива в 5★ и категорий проблем в 1-4★ (общий Ozon+WB)
 │   ├── drive_stocks_client.py    # Получение остатков из Google Drive (Ozon и WB — разные форматы файла)
-│   └── recommendations.py        # Алгоритм рекомендаций товаров — общий для Ozon и WB
+│   ├── recommendations.py        # Алгоритм рекомендаций товаров — общий для Ozon и WB
+│   └── llm_client.py             # Адресный ответ на 1-4★ с явной проблемой через GigaChat
 ├── cookies/                      # Cookies/токены по аккаунтам (не в git)
 │   ├── skazka_cookies.json          # Ozon
 │   ├── milky_garden_cookies.json    # Ozon
@@ -102,7 +107,8 @@ python -c "from marketplaces.wb.api_client import WBAPIClient; from marketplaces
 │   ├── skazka_wb_token.json         # Wildberries (feedback_token — только для отзывов)
 │   ├── milky_garden_wb_token.json   # Wildberries
 │   └── timeless_wb_token.json       # Wildberries
-└── drive_service_account.json    # Сервисный аккаунт Google Drive (не в git)
+├── drive_service_account.json    # Сервисный аккаунт Google Drive (не в git)
+└── russian_trusted_root_ca.pem   # Сертификат НУЦ Минцифры для TLS к api.gigachat (публичный, в git)
 ```
 
 ### Smart Reply Algorithm (для 5★ отзывов)
@@ -172,6 +178,37 @@ Wildberries (например, `"Кабинет 1 (...)"`), поэтому `Driv
 `target_folder` по цепочке родителей: `<grandparent_folder>/<target_folder>/Остатки.xlsx`,
 где `grandparent_folder` — `"Ozon"` или `"Wildberries"`. Без этого второго уровня поиск
 по одному имени папки — неоднозначен.
+
+### Адресные ответы на 1-4★ через GigaChat (shared/llm_client.py)
+
+**Цель:** для 1-4★ отзывов с явной, узнаваемой проблемой в тексте — сгенерировать
+ответ, адресованный именно этой проблеме, а не общий шаблон.
+
+1. **Детект проблемы** — `shared.review_heuristics.detect_review_issue(text)` по
+   ключевым словам определяет категорию: `size_mismatch`, `fabric_quality`, `defect`,
+   `color_mismatch`, `wrong_item`, или `general_negative` (общий негатив без конкретики,
+   не считается "явной нестыковкой"). Тот же список категорий (`_ISSUE_PATTERNS`)
+   используется и для детекта скрытого негатива в 5★ (`looks_negative_5star`) — единый
+   источник правды вместо двух раздельных списков стоп-слов.
+2. **Вызов LLM** — только если категория есть в `ISSUE_LABELS` (т.е. не
+   `general_negative`): `shared.llm_client.generate_issue_reply(rating, review_text,
+   issue_category, brand_name)` формирует промпт и зовёт GigaChat
+   (`GigaChat-2`/Lite, SDK `gigachat`).
+3. **Graceful degradation** — любая ошибка (нет ключа, таймаут, лимит) → `None` →
+   вызывающая сторона (`replier.py`) падает обратно на фиксированный шаблон
+   (`config/templates.py`), как и раньше.
+4. **Аутентификация** — `GIGACHAT_CREDENTIALS` в `.env` (Authorization key с
+   developers.sber.ru, это уже `base64(client_id:client_secret)` — SDK сам обменивает
+   его на access-token и обновляет каждые 30 минут).
+5. **TLS-сертификат** — GigaChat API использует сертификат НУЦ Минцифры, не входящий
+   в стандартные доверенные корни. Вместо отключения проверки (`verify_ssl_certs=False`)
+   используется настоящий сертификат — `russian_trusted_root_ca.pem` в корне проекта
+   (публичный файл, скачан с gu-st.ru, безопасно хранить в git).
+6. **Почему GigaChat, а не Gemini:** Free Tier Gemini на флагманской модели —
+   20 запросов/день, и модель тратит 200-700 токенов на скрытые "размышления" перед
+   ответом. GigaChat-2 даёт 250 млн бесплатных токенов на 12 месяцев, без "размышлений"
+   и быстрее — для короткого адресного ответа этого более чем достаточно. Проверено
+   эмпирически 2026-09-25.
 
 ### Core Flow: Collect Reviews
 
@@ -267,6 +304,14 @@ Wildberries (например, `"Кабинет 1 (...)"`), поэтому `Driv
 - Доступ к папкам "Выгрузка авто" / Ozon / "Кабинет 1 (Профтекс)", "Кабинет 2 (Timeless)", "Кабинет 3 (Milky Garden)"
 - Доступ к папкам "Выгрузка авто" / Wildberries / "Кабинет 1 (Сказка)", "Кабинет 2 (Milky Garden)", "Кабинет 3 (Timeless)"
   (нумерация кабинетов здесь своя, не совпадает с Ozon)
+
+**GigaChat (для адресных ответов на 1-4★, см. `shared/llm_client.py`), общий для всех аккаунтов:**
+- `GIGACHAT_CREDENTIALS` в `.env` — Authorization key с developers.sber.ru
+  (Freemium: 250 млн бесплатных токенов на 12 месяцев для GigaChat-2/Lite)
+- TLS: `russian_trusted_root_ca.pem` в корне проекта (публичный сертификат НУЦ
+  Минцифры, безопасно хранить в git — не секрет)
+- Graceful degradation: без ключа или при ошибке API — просто фиксированный шаблон,
+  ничего не ломается
 
 ## Code Conventions
 

@@ -10,7 +10,7 @@ from config.templates import OZON_CANCELED_ORDER_HIGH_RATING_TEMPLATES, OZON_REP
 from marketplaces.ozon.api_client import OzonAPIClient
 from shared.article_parsing import resolve_sub_brand
 from shared.drive_stocks_client import load_stocks_from_drive
-from shared.gemini_client import generate_issue_reply
+from shared.llm_client import generate_issue_reply
 from shared.logger import logger
 from shared.recommendations import (
     generate_reply_text,
@@ -217,7 +217,7 @@ class OzonReviewReplier:
                     logger.warning(f"   ⚠️  Ошибка генерации рекомендаций: {e}")
 
         # Для 1-4★ с явной, узнаваемой проблемой в тексте — адресный ответ через Gemini
-        # вместо общего шаблона (см. shared/gemini_client.py). Любая ошибка API —
+        # вместо общего шаблона (см. shared/llm_client.py). Любая ошибка API —
         # тихий fallback на фиксированный шаблон.
         if rating < 5:
             issue = detect_review_issue(review_text)

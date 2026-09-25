@@ -1,4 +1,4 @@
-"""Генерация адресных ответов на нестандартные 1-4★ отзывы через Gemini API.
+"""Генерация адресных ответов на нестандартные 1-4★ отзывы через GigaChat API.
 
 Используется только когда `shared.review_heuristics.detect_review_issue` нашла
 в тексте отзыва конкретную, узнаваемую проблему (размер, ткань, брак, цвет,
@@ -11,9 +11,9 @@
 from functools import lru_cache
 from typing import Optional
 
-from google import genai
+from gigachat import GigaChat
 
-from config.gemini_config import GEMINI_API_KEY, GEMINI_MAX_OUTPUT_TOKENS, GEMINI_MODEL, GEMINI_TIMEOUT
+from config.llm_config import GIGACHAT_CA_BUNDLE_FILE, GIGACHAT_CREDENTIALS, GIGACHAT_MODEL, GIGACHAT_TIMEOUT
 from shared.logger import logger
 from shared.review_heuristics import ISSUE_LABELS, MAX_REPLY_LEN
 
@@ -55,7 +55,7 @@ def generate_issue_reply(rating: int, review_text: str, issue_category: str, bra
         review_text=review_text or "",
     )
 
-    reply = _call_gemini_api(prompt)
+    reply = _call_gigachat_api(prompt)
     if not reply:
         return None
 
@@ -63,33 +63,28 @@ def generate_issue_reply(rating: int, review_text: str, issue_category: str, bra
 
 
 @lru_cache(maxsize=1)
-def _get_client() -> Optional[genai.Client]:
-    """Ленивая инициализация клиента Gemini SDK (один раз за процесс)."""
-    if not GEMINI_API_KEY:
+def _get_client() -> Optional[GigaChat]:
+    """Ленивая инициализация клиента GigaChat SDK (один раз за процесс)."""
+    if not GIGACHAT_CREDENTIALS:
         return None
-    return genai.Client(api_key=GEMINI_API_KEY)
+    return GigaChat(
+        credentials=GIGACHAT_CREDENTIALS,
+        model=GIGACHAT_MODEL,
+        ca_bundle_file=GIGACHAT_CA_BUNDLE_FILE,
+        timeout=GIGACHAT_TIMEOUT,
+    )
 
 
-def _call_gemini_api(prompt: str) -> Optional[str]:
-    """Низкоуровневый вызов Gemini через google-genai SDK. None при любой ошибке."""
+def _call_gigachat_api(prompt: str) -> Optional[str]:
+    """Низкоуровневый вызов GigaChat через SDK. None при любой ошибке."""
     client = _get_client()
     if not client:
-        logger.warning("⚠️  GEMINI_API_KEY не задан, пропускаем генерацию через Gemini")
+        logger.warning("⚠️  GIGACHAT_CREDENTIALS не задан, пропускаем генерацию ответа")
         return None
 
     try:
-        interaction = client.interactions.create(
-            model=GEMINI_MODEL,
-            input=prompt,
-            generation_config={"max_output_tokens": GEMINI_MAX_OUTPUT_TOKENS},
-            timeout=GEMINI_TIMEOUT,
-        )
-        if interaction.status != "completed":
-            # Обычно значит, что "размышления" модели съели весь бюджет токенов
-            # и финальный текст обрезался — см. GEMINI_MAX_OUTPUT_TOKENS.
-            logger.warning(f"⚠️  Gemini вернул незавершённый ответ (status={interaction.status})")
-            return None
-        return interaction.output_text
+        response = client.chat(prompt)
+        return response.choices[0].message.content
     except Exception as e:
-        logger.warning(f"⚠️  Gemini API ошибка: {e}")
+        logger.warning(f"⚠️  GigaChat API ошибка: {e}")
         return None

@@ -10,7 +10,7 @@ from config.wb_config import FEEDBACKS_DELAY, MAX_REPLIES_PER_RUN
 from marketplaces.wb.api_client import WBAPIClient
 from shared.article_parsing import resolve_sub_brand
 from shared.drive_stocks_client import load_wb_stocks_from_drive
-from shared.gemini_client import generate_issue_reply
+from shared.llm_client import generate_issue_reply
 from shared.logger import logger
 from shared.recommendations import (
     build_offer_index,
@@ -204,7 +204,7 @@ class WBReviewReplier:
                     logger.warning(f"   ⚠️  Ошибка генерации рекомендаций: {e}")
 
         # Для 1-4★ с явной, узнаваемой проблемой в тексте — адресный ответ через Gemini
-        # вместо общего шаблона (см. shared/gemini_client.py).
+        # вместо общего шаблона (см. shared/llm_client.py).
         if rating < 5:
             issue = detect_review_issue(review_text)
             if issue in ISSUE_LABELS:
